@@ -1,5 +1,4 @@
 """Test sandboxjs.py and related code."""
-
 import logging
 import os
 import shutil
@@ -23,7 +22,7 @@ node_versions = [
     ("v7.7.3\n", True),
 ]
 
-configure_logging(_logger.handlers[-1], False, False, True, True, True)
+configure_logging(_logger.handlers[-1], False, True, True, True)
 _logger.setLevel(logging.DEBUG)
 
 
@@ -65,7 +64,7 @@ def hide_nodejs(temp_dir: Path) -> str:
                     os.symlink(os.path.join(dirname, entry), new_dir / entry)
             paths.append(str(new_dir))
             dirname_path = Path(dirname)
-            for path in list(paths):
+            for path in paths:
                 if Path(path).resolve() == dirname_path:
                     paths.remove(path)
     return ":".join(paths)

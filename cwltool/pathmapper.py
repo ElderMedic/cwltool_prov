@@ -4,17 +4,8 @@ import os
 import stat
 import urllib
 import uuid
-from typing import (
-    Dict,
-    ItemsView,
-    Iterable,
-    Iterator,
-    KeysView,
-    List,
-    Optional,
-    Tuple,
-    cast,
-)
+from pathlib import Path
+from typing import Dict, Iterator, List, Optional, Tuple, cast
 
 from mypy_extensions import mypyc_attr
 from schema_salad.exceptions import ValidationException
@@ -219,29 +210,21 @@ class PathMapper:
             return MapperEnt(p.resolved, p.target + src[i:], p.type, p.staged)
         return self._pathmap[src]
 
-    def files(self) -> KeysView[str]:
-        """Return a dictionary keys view of locations."""
-        return self._pathmap.keys()
+    def files(self) -> List[str]:
+        return list(self._pathmap.keys())
 
-    def items(self) -> ItemsView[str, MapperEnt]:
-        """Return a dictionary items view."""
-        return self._pathmap.items()
+    def items(self) -> List[Tuple[str, MapperEnt]]:
+        return list(self._pathmap.items())
 
-    def items_exclude_children(self) -> ItemsView[str, MapperEnt]:
-        """Return a dictionary items view minus any entries which are children of other entries."""
+    def items_exclude_children(self) -> List[Tuple[str, MapperEnt]]:
         newitems = {}
-
-        def parents(path: str) -> Iterable[str]:
-            result = path
-            while len(result) > 1:
-                result = os.path.dirname(result)
-                yield result
-
+        keys = [key for key, entry in self.items()]
         for key, entry in self.items():
-            if not self.files().isdisjoint(parents(key)):
+            parents = Path(key).parents
+            if any([Path(key_) in parents for key_ in keys]):
                 continue
             newitems[key] = entry
-        return newitems.items()
+        return list(newitems.items())
 
     def reversemap(
         self,

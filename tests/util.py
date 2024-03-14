@@ -1,6 +1,3 @@
-"""Test functions."""
-
-import atexit
 import contextlib
 import io
 import json
@@ -8,16 +5,15 @@ import os
 import shutil
 import subprocess
 import sys
-from contextlib import ExitStack
 from pathlib import Path
 from typing import Dict, Generator, List, Mapping, Optional, Tuple, Union
 
 import pytest
+from pkg_resources import Requirement, ResolutionError, resource_filename
 
 from cwltool.env_to_stdout import deserialize_env
 from cwltool.main import main
 from cwltool.singularity import is_version_2_6, is_version_3_or_newer
-from cwltool.utils import as_file, files
 
 
 def force_default_container(default_container_id: str, _: str) -> str:
@@ -29,15 +25,12 @@ def get_data(filename: str) -> str:
     filename = os.path.normpath(filename)
     filepath = None
     try:
-        file_manager = ExitStack()
-        atexit.register(file_manager.close)
-        traversable = files("cwltool") / filename
-        filepath = file_manager.enter_context(as_file(traversable))
-    except ModuleNotFoundError:
+        filepath = resource_filename(Requirement.parse("cwltool"), filename)
+    except ResolutionError:
         pass
     if not filepath or not os.path.isfile(filepath):
-        filepath = Path(os.path.dirname(__file__)) / ".." / filename
-    return str(filepath.resolve())
+        filepath = os.path.join(os.path.dirname(__file__), os.pardir, filename)
+    return str(Path(filepath).resolve())
 
 
 needs_docker = pytest.mark.skipif(
@@ -74,7 +67,8 @@ def env_accepts_null() -> bool:
     if _env_accepts_null is None:
         result = subprocess.run(
             ["env", "-0"],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             encoding="utf-8",
         )
         _env_accepts_null = result.returncode == 0
@@ -153,13 +147,13 @@ def get_tool_env(
         args.append(inputs_file)
 
     with working_directory(tmp_path):
-        rc, stdout, stderr = get_main_output(
+        rc, stdout, _ = get_main_output(
             args,
             replacement_env=replacement_env,
             extra_env=extra_env,
             monkeypatch=monkeypatch,
         )
-        assert rc == 0, stdout + "\n" + stderr
+        assert rc == 0
 
         output = json.loads(stdout)
         with open(output["env"]["path"]) as _:

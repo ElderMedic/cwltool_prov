@@ -1,5 +1,4 @@
 """Test that files marked as 'streamable' when 'streaming_allowed' can be named pipes."""
-
 import os
 from pathlib import Path
 from typing import cast

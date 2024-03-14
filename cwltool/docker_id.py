@@ -30,7 +30,9 @@ def check_output_and_strip(cmd: List[str]) -> Optional[str]:
     :return: Stripped string output of the command, or ``None`` if error
     """
     try:
-        result = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True)  # nosec
+        result = subprocess.check_output(  # nosec
+            cmd, stderr=subprocess.STDOUT, universal_newlines=True
+        )
         return result.strip()
     except (OSError, subprocess.CalledProcessError, TypeError, AttributeError):
         # OSError is raised if command doesn't exist

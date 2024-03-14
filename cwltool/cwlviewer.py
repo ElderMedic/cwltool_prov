@@ -1,5 +1,4 @@
 """Visualize a CWL workflow."""
-
 from pathlib import Path
 from typing import Iterator, List, cast
 from urllib.parse import urlparse

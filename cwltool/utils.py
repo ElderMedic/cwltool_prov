@@ -1,14 +1,5 @@
 """Shared functions and other definitions."""
-
 import collections
-
-try:
-    import fcntl
-except ImportError:
-    # Guard against `from .utils import ...` on windows.
-    # See windows_check() in main.py
-    pass
-import importlib.metadata
 import os
 import random
 import shutil
@@ -25,24 +16,22 @@ from functools import partial
 from itertools import zip_longest
 from pathlib import Path, PurePosixPath
 from tempfile import NamedTemporaryFile
+from types import ModuleType
 from typing import (
     IO,
     TYPE_CHECKING,
     Any,
     Callable,
-    Deque,
     Dict,
     Generator,
     Iterable,
     List,
-    Literal,
     MutableMapping,
     MutableSequence,
     NamedTuple,
     Optional,
     Set,
     Tuple,
-    TypedDict,
     Union,
     cast,
 )
@@ -50,22 +39,21 @@ from typing import (
 import requests
 from cachecontrol import CacheControl
 from cachecontrol.caches import FileCache
-from mypy_extensions import mypyc_attr
+from mypy_extensions import TypedDict, mypyc_attr
 from schema_salad.exceptions import ValidationException
 from schema_salad.ref_resolver import Loader
+from typing_extensions import Deque, Literal
 
-if sys.version_info >= (3, 9):
-    from importlib.resources import as_file, files
+if sys.version_info >= (3, 8):
+    import importlib.metadata as importlib_metadata
 else:
-    from importlib_resources import as_file, files
+    import importlib_metadata
 
 if TYPE_CHECKING:
     from .command_line_tool import CallbackJob, ExpressionJob
     from .job import CommandLineJob, JobBase
     from .stdfsaccess import StdFsAccess
     from .workflow_job import WorkflowJob
-
-__all__ = ["files", "as_file"]
 
 __random_outdir: Optional[str] = None
 
@@ -75,14 +63,27 @@ DEFAULT_TMP_PREFIX = tempfile.gettempdir() + os.path.sep
 
 processes_to_kill: Deque["subprocess.Popen[str]"] = collections.deque()
 
-CWLOutputType = Union[
+CWLOutputAtomType = Union[
     None,
     bool,
     str,
     int,
     float,
-    MutableSequence["CWLOutputType"],
-    MutableMapping[str, "CWLOutputType"],
+    MutableSequence[
+        Union[None, bool, str, int, float, MutableSequence[Any], MutableMapping[str, Any]]
+    ],
+    MutableMapping[
+        str,
+        Union[None, bool, str, int, float, MutableSequence[Any], MutableMapping[str, Any]],
+    ],
+]
+CWLOutputType = Union[
+    bool,
+    str,
+    int,
+    float,
+    MutableSequence[CWLOutputAtomType],
+    MutableMapping[str, CWLOutputAtomType],
 ]
 CWLObjectType = MutableMapping[str, Optional[CWLOutputType]]
 """Typical raw dictionary found in lightly parsed CWL."""
@@ -98,16 +99,16 @@ SinkType = Union[CWLOutputType, CWLObjectType]
 DirectoryType = TypedDict(
     "DirectoryType", {"class": str, "listing": List[CWLObjectType], "basename": str}
 )
-JSONType = Union[Dict[str, "JSONType"], List["JSONType"], str, int, float, bool, None]
-
-
-class WorkflowStateItem(NamedTuple):
-    """Workflow state item."""
-
-    parameter: CWLObjectType
-    value: Optional[CWLOutputType]
-    success: str
-
+JSONAtomType = Union[Dict[str, Any], List[Any], str, int, float, bool, None]
+JSONType = Union[Dict[str, JSONAtomType], List[JSONAtomType], str, int, float, bool, None]
+WorkflowStateItem = NamedTuple(
+    "WorkflowStateItem",
+    [
+        ("parameter", CWLObjectType),
+        ("value", Optional[CWLOutputType]),
+        ("success", str),
+    ],
+)
 
 ParametersType = List[CWLObjectType]
 StepType = CWLObjectType  # WorkflowStep
@@ -117,7 +118,8 @@ LoadListingType = Union[Literal["no_listing"], Literal["shallow_listing"], Liter
 
 def versionstring() -> str:
     """Version of CWLtool used to execute the workflow."""
-    if pkg := importlib.metadata.version("cwltool"):
+    pkg = importlib_metadata.version("cwltool")
+    if pkg:
         return f"{sys.argv[0]} {pkg}"
     return "{} {}".format(sys.argv[0], "unknown version")
 
@@ -241,12 +243,29 @@ def random_outdir() -> str:
     return __random_outdir
 
 
+#
+# Simple multi-platform (fcntl/msvrt) file locking wrapper
+#
+fcntl: Optional[ModuleType] = None
+msvcrt: Optional[ModuleType] = None
+try:
+    import fcntl
+except ImportError:
+    import msvcrt
+
+
 def shared_file_lock(fd: IO[Any]) -> None:
-    fcntl.flock(fd.fileno(), fcntl.LOCK_SH)
+    if fcntl:
+        fcntl.flock(fd.fileno(), fcntl.LOCK_SH)
+    elif msvcrt:
+        msvcrt.locking(fd.fileno(), msvcrt.LK_LOCK, 1024)
 
 
 def upgrade_lock(fd: IO[Any]) -> None:
-    fcntl.flock(fd.fileno(), fcntl.LOCK_EX)
+    if fcntl:
+        fcntl.flock(fd.fileno(), fcntl.LOCK_EX)
+    elif msvcrt:
+        pass
 
 
 def adjustFileObjs(rec: Any, op: Union[Callable[..., Any], "partial[Any]"]) -> None:
@@ -291,7 +310,7 @@ def get_listing(fs_access: "StdFsAccess", rec: CWLObjectType, recursive: bool = 
         return
     if "listing" in rec:
         return
-    listing: List[CWLOutputType] = []
+    listing: List[CWLOutputAtomType] = []
     loc = cast(str, rec["location"])
     for ld in fs_access.listdir(loc):
         parse = urllib.parse.urlparse(ld)
@@ -376,8 +395,8 @@ def ensure_writable(path: str, include_root: bool = False) -> None:
     if os.path.isdir(path):
         if include_root:
             add_writable_flag(path)
-        for root, dirs, files_ in os.walk(path):
-            for name in files_:
+        for root, dirs, files in os.walk(path):
+            for name in files:
                 add_writable_flag(os.path.join(root, name))
             for name in dirs:
                 add_writable_flag(os.path.join(root, name))
@@ -388,8 +407,8 @@ def ensure_writable(path: str, include_root: bool = False) -> None:
 def ensure_non_writable(path: str) -> None:
     """Attempt to change permissions to ensure that a path is not writable."""
     if os.path.isdir(path):
-        for root, dirs, files_ in os.walk(path):
-            for name in files_:
+        for root, dirs, files in os.walk(path):
+            for name in files:
                 j = os.path.join(root, name)
                 st = os.stat(j)
                 mode = stat.S_IMODE(st.st_mode)

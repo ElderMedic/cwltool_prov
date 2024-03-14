@@ -22,4 +22,4 @@ hints:
     packages:
     - package: seqtk
       version:
-      - "1.4"
+      - r93

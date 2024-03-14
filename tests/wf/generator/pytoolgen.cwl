@@ -28,5 +28,5 @@ run:
          v.push({entryname: "inp.py", entry: inputs.script});
          return v;
         }
-  arguments: [python3, inp.py]
+  arguments: [python, inp.py]
   stdout: main.cwl

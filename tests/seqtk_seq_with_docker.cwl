@@ -22,6 +22,6 @@ hints:
     packages:
     - package: seqtk
       version:
-      - '1.4'
+      - '1.2'
   DockerRequirement:
-    dockerPull: quay.io/biocontainers/seqtk:1.4--he4a0461_1
+    dockerPull: quay.io/biocontainers/seqtk:1.2--0

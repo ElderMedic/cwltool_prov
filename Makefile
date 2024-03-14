@@ -25,7 +25,7 @@ MODULE=cwltool
 # `SHELL=bash` doesn't work for some, so don't use BASH-isms like
 # `[[` conditional expressions.
 PYSOURCES=$(wildcard ${MODULE}/**.py cwltool/cwlprov/*.py tests/*.py) setup.py
-DEVPKGS=diff_cover pylint pep257 pydocstyle 'tox<4' tox-pyenv auto-walrus \
+DEVPKGS=diff_cover pylint pep257 pydocstyle 'tox<4' tox-pyenv \
 	isort wheel autoflake pyupgrade bandit -rlint-requirements.txt\
 	-rtest-requirements.txt -rmypy-requirements.txt -rdocs/requirements.txt
 DEBDEVPKGS=pep8 python-autopep8 pylint python-coverage pydocstyle sloccount \
@@ -72,18 +72,22 @@ dev: install-dep
 ## dist                   : create a module package for distribution
 dist: dist/${MODULE}-$(VERSION).tar.gz
 
-dist/${MODULE}-$(VERSION).tar.gz: $(SOURCES)
-	python3 -m build
+check-python3:
+# Check that the default python version is python 3
+	python --version 2>&1 | grep "Python 3"
+
+dist/${MODULE}-$(VERSION).tar.gz: check-python3 $(SOURCES)
+	python setup.py sdist bdist_wheel
 
 ## docs                   : make the docs
 docs: FORCE
 	cd docs && $(MAKE) html
 
 ## clean                  : clean up all temporary / machine-generated files
-clean: FORCE
+clean: check-python3 FORCE
 	rm -f ${MODULE}/*.pyc tests/*.pyc *.so ${MODULE}/*.so cwltool/cwlprov/*.so
 	rm -Rf ${MODULE}/__pycache__/
-	rm -Rf build
+	python setup.py clean --all || true
 	rm -Rf .coverage
 	rm -f diff-cover.html
 
@@ -118,10 +122,10 @@ codespell-fix:
 
 ## format                 : check/fix all code indentation and formatting (runs black)
 format:
-	black --exclude cwltool/schemas --exclude cwltool/_version.py setup.py cwltool.py cwltool tests mypy-stubs
+	black --exclude cwltool/schemas setup.py cwltool.py cwltool tests mypy-stubs
 
 format-check:
-	black --diff --check --exclude cwltool/schemas setup.py --exclude cwltool/_version.py cwltool.py cwltool tests mypy-stubs
+	black --diff --check --exclude cwltool/schemas setup.py cwltool.py cwltool tests mypy-stubs
 
 ## pylint                 : run static code analysis on Python code
 pylint: $(PYSOURCES)
@@ -159,12 +163,12 @@ diff-cover.html: coverage.xml
 	diff-cover --compare-branch=main $^ --html-report $@
 
 ## test                   : run the cwltool test suite
-test: $(PYSOURCES)
-	python3 -m pytest -rs ${PYTEST_EXTRA}
+test: check-python3 $(PYSOURCES)
+	python -m pytest -rs ${PYTEST_EXTRA}
 
 ## testcov                : run the cwltool test suite and collect coverage
-testcov: $(PYSOURCES)
-	python3 -m pytest -rs --cov --cov-config=.coveragerc --cov-report= ${PYTEST_EXTRA}
+testcov: check-python3 $(PYSOURCES)
+	python -m pytest -rs --cov --cov-config=.coveragerc --cov-report= ${PYTEST_EXTRA}
 
 sloccount.sc: $(PYSOURCES) Makefile
 	sloccount --duplicates --wide --details $^ > $@
@@ -179,7 +183,23 @@ list-author-emails:
 
 mypy3: mypy
 mypy: $(PYSOURCES)
+	if ! test -f $(shell python -c 'import ruamel.yaml; import os.path; print(os.path.dirname(ruamel.yaml.__file__))')/py.typed ; \
+	then \
+		rm -Rf mypy-stubs/ruamel/yaml ; \
+		ln -s $(shell python -c 'import ruamel.yaml; import os.path; print(os.path.dirname(ruamel.yaml.__file__))') \
+			mypy-stubs/ruamel/ ; \
+	fi  # if minimally required ruamel.yaml version is 0.15.99 or greater, than the above can be removed
 	MYPYPATH=$$MYPYPATH:mypy-stubs mypy $^
+
+mypy_3.6: $(filter-out setup.py gittagger.py,$(PYSOURCES))
+	if ! test -f $(shell python -c 'import ruamel.yaml; import os.path; print(os.path.dirname(ruamel.yaml.__file__))')/py.typed ; \
+	then \
+		rm -Rf mypy-stubs/ruamel/yaml ; \
+		ln -s $(shell python -c 'import ruamel.yaml; import os.path; print(os.path.dirname(ruamel.yaml.__file__))') \
+			mypy-stubs/ruamel/ ; \
+	fi  # if minimally required ruamel.yaml version is 0.15.99 or greater, than the above can be removed
+	MYPYPATH=$$MYPYPATH:mypy-stubs mypy --python-version 3.6 $^
+
 
 mypyc: $(PYSOURCES)
 	MYPYPATH=mypy-stubs CWLTOOL_USE_MYPYC=1 pip install --verbose -e . \
@@ -190,19 +210,15 @@ shellcheck: FORCE
 		cwltool-in-docker.sh
 
 pyupgrade: $(PYSOURCES)
-	pyupgrade --exit-zero-even-if-changed --py38-plus $^
-	auto-walrus $^
+	pyupgrade --exit-zero-even-if-changed --py36-plus $^
 
-release-test: FORCE
+release-test: check-python3 FORCE
 	git diff-index --quiet HEAD -- || ( echo You have uncommitted changes, please commit them and try again; false )
 	./release-test.sh
 
-release:
-	export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_CWLTOOL=${VERSION} && \
-	./release-test.sh && \
+release: release-test
 	. testenv2/bin/activate && \
-		pip install build && \
-		python3 -m build testenv2/src/${MODULE} && \
+		python testenv2/src/${MODULE}/setup.py sdist bdist_wheel && \
 		pip install twine && \
 		twine upload testenv2/src/${MODULE}/dist/* && \
 		git tag ${VERSION} && git push --tags

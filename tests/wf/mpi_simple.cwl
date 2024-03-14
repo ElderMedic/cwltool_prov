@@ -10,7 +10,7 @@ doc: |
   processes. Requires Python (but you have cwltool running, right?)
   and an MPI implementation.
 
-baseCommand: python3
+baseCommand: python
 requirements:
   cwltool:MPIRequirement:
     processes: 2

@@ -1,6 +1,0 @@
-from ..recipe import Recipe
-
-class WriterBase:
-    recipe: dict[str, Recipe]
-    def __init__(self, recipe: dict[str, Recipe] | None = ...) -> None: ...
-    def write(self, output_file: str | None = ..., force: bool = ...) -> None: ...

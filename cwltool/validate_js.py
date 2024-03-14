@@ -18,6 +18,7 @@ from typing import (
 from cwl_utils.errors import SubstitutionError
 from cwl_utils.expression import scanner as scan_expression
 from cwl_utils.sandboxjs import code_fragment_to_js, exec_js_process
+from importlib_resources import files
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 from schema_salad.avro.schema import (
     ArraySchema,
@@ -32,7 +33,6 @@ from schema_salad.validate import validate_ex
 
 from .errors import WorkflowException
 from .loghandler import _logger
-from .utils import files
 
 
 def is_expression(tool: Any, schema: Optional[Schema]) -> bool:
@@ -87,12 +87,20 @@ def get_expressions(
         if not isinstance(tool, MutableSequence):
             return []
 
+        def tmp_expr(
+            x: Tuple[int, Union[CommentedMap, str, CommentedSeq]]
+        ) -> List[Tuple[str, Optional[SourceLine]]]:
+            # using a lambda for this broke mypyc v0.910 and before
+            return get_expressions(
+                x[1],
+                cast(ArraySchema, schema).items,
+                SourceLine(tool, x[0], include_traceback=debug),
+            )
+
         return list(
             itertools.chain(
                 *map(
-                    lambda x: get_expressions(
-                        x[1], getattr(schema, "items"), SourceLine(tool, x[0])  # noqa: B009
-                    ),
+                    tmp_expr,
                     enumerate(tool),
                 )
             )

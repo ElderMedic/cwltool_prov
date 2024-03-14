@@ -107,7 +107,7 @@ def test_unicode_in_output_files(tmp_path: Path, filename: str) -> None:
     assert main(params) == 0
 
 
-class StubFsAccess(StdFsAccess):
+class TestFsAccess(StdFsAccess):
     """Stub fs access object that doesn't rely on the filesystem."""
 
     def glob(self, pattern: str) -> List[str]:
@@ -195,7 +195,7 @@ def test_clt_returns_specialchar_names(tmp_path: Path) -> None:
         builder.files, builder.stagedir, RuntimeContext(), True
     )
     builder.outdir = "/var/spool/cwl"
-    fs_access = StubFsAccess("")
+    fs_access = TestFsAccess("")
 
     result = cast(
         CWLObjectType,

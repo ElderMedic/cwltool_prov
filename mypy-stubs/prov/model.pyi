@@ -223,9 +223,10 @@ class ProvBundle:
     ) -> QualifiedName | None: ...
     def get_records(
         self,
-        class_or_type_or_tuple: (
-            type | type[int | str] | Tuple[type | type[int | str] | Tuple[Any, ...], ...] | None
-        ) = ...,
+        class_or_type_or_tuple: type
+        | type[int | str]
+        | Tuple[type | type[int | str] | Tuple[Any, ...], ...]
+        | None = ...,
     ) -> List[ProvRecord]: ...
     def get_record(self, identifier: Identifier | None) -> ProvRecord | List[ProvRecord] | None: ...
     def is_document(self) -> bool: ...

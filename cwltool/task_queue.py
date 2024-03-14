@@ -55,8 +55,8 @@ class TaskQueue:
                 return
             try:
                 task()
-            except BaseException as e:  # noqa: B036
-                _logger.exception("Unhandled exception running task", exc_info=e)
+            except BaseException as e:
+                _logger.exception("Unhandled exception running task")
                 self.error = e
             finally:
                 with self.lock:

@@ -693,7 +693,7 @@ class CommandLineTool(Process):
         for i, t2 in enumerate(ls):
             if not isinstance(t2, Mapping):
                 raise SourceLine(initialWorkdir, "listing", WorkflowException, debug).makeError(
-                    f"Entry at index {i} of listing is not a record, was {type(t2)}"
+                    "Entry at index %s of listing is not a record, was %s" % (i, type(t2))
                 )
 
             if "entry" not in t2:
@@ -715,9 +715,7 @@ class CommandLineTool(Process):
 
             if not isinstance(t2["entry"], Mapping):
                 raise SourceLine(initialWorkdir, "listing", WorkflowException, debug).makeError(
-                    "Entry at index {} of listing is not a record, was {}".format(
-                        i, type(t2["entry"])
-                    )
+                    "Entry at index %s of listing is not a record, was %s" % (i, type(t2["entry"]))
                 )
 
             if t2["entry"].get("class") not in ("File", "Directory"):
@@ -866,7 +864,7 @@ class CommandLineTool(Process):
                         and "checksum" in e
                         and e["checksum"] != "sha1$hash"
                     ):
-                        return cast(str, e["checksum"])
+                        return cast(Optional[str], e["checksum"])
                 return None
 
             def remove_prefix(s: str, prefix: str) -> str:
@@ -1456,18 +1454,10 @@ class CommandLineTool(Process):
                                         continue
                                     if isinstance(sfitem, str):
                                         sfitem = {"path": pathprefix + sfitem}
-                                    original_sfitem = copy.deepcopy(sfitem)
-                                    if (
-                                        not fs_access.exists(
-                                            cast(
-                                                str, cast(CWLObjectType, revmap(sfitem))["location"]
-                                            )
-                                        )
-                                        and sf_required
-                                    ):
+                                    if not fs_access.exists(sfitem["path"]) and sf_required:
                                         raise WorkflowException(
                                             "Missing required secondary file '%s'"
-                                            % (original_sfitem["path"])
+                                            % (sfitem["path"])
                                         )
                                     if "path" in sfitem and "location" not in sfitem:
                                         revmap(sfitem)

@@ -11,5 +11,5 @@ inputs:
 outputs: []
 requirements:
   cwltool:TimeLimit:
-    timelimit: 20
+    timelimit: 15
 baseCommand: sleep

@@ -1,12 +1,10 @@
 """Static checking of CWL workflow connectivity."""
-
 from collections import namedtuple
 from typing import (
     Any,
     Dict,
     Iterator,
     List,
-    Literal,
     MutableMapping,
     MutableSequence,
     Optional,
@@ -18,11 +16,12 @@ from typing import (
 from schema_salad.exceptions import ValidationException
 from schema_salad.sourceline import SourceLine, bullets, strip_dup_lineno
 from schema_salad.utils import json_dumps
+from typing_extensions import Literal
 
 from .errors import WorkflowException
 from .loghandler import _logger
 from .process import shortname
-from .utils import CWLObjectType, CWLOutputType, SinkType, aslist
+from .utils import CWLObjectType, CWLOutputAtomType, CWLOutputType, SinkType, aslist
 
 
 def _get_type(tp):
@@ -91,8 +90,8 @@ def can_assign_src_to_sink(src: SinkType, sink: Optional[SinkType], strict: bool
             return False
         if src["type"] == "array" and sink["type"] == "array":
             return can_assign_src_to_sink(
-                cast(MutableSequence[CWLOutputType], src["items"]),
-                cast(MutableSequence[CWLOutputType], sink["items"]),
+                cast(MutableSequence[CWLOutputAtomType], src["items"]),
+                cast(MutableSequence[CWLOutputAtomType], sink["items"]),
                 strict,
             )
         if src["type"] == "record" and sink["type"] == "record":
@@ -289,9 +288,7 @@ def static_checker(
             )
             + "\n"
             + SourceLine(sink, "type").makeError(
-                "  with sink '{}' of type {}".format(
-                    shortname(sink["id"]), json_dumps(sink["type"])
-                )
+                "  with sink '%s' of type %s" % (shortname(sink["id"]), json_dumps(sink["type"]))
             )
         )
         if extra_message is not None:
@@ -510,7 +507,8 @@ def get_step_id(field_id: str) -> str:
 
 
 def is_conditional_step(param_to_step: Dict[str, CWLObjectType], parm_id: str) -> bool:
-    if (source_step := param_to_step.get(parm_id)) is not None:
+    source_step = param_to_step.get(parm_id)
+    if source_step is not None:
         if source_step.get("when") is not None:
             return True
     return False
