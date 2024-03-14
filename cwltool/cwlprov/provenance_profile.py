@@ -29,8 +29,9 @@ from ..job import CommandLineJob, JobBase
 from ..loghandler import _logger
 from ..process import Process, shortname
 from ..stdfsaccess import StdFsAccess
-from ..utils import CWLObjectType, JobsType, get_listing, posix_path, versionstring
+from ..utils import CWLObjectType, JobsType, posix_path, versionstring
 from ..workflow_job import WorkflowJob
+from . import provenance_constants
 from .provenance_constants import (
     ACCOUNT_UUID,
     CWLPROV,
@@ -47,7 +48,7 @@ from .provenance_constants import (
     UUID,
     WF4EVER,
     WFDESC,
-    WFPROV,
+    WFPROV, DATAX,
 )
 from .writablebagfile import create_job, write_bag_file  # change this later
 
@@ -243,6 +244,7 @@ class ProvenanceProfile:
             # record provenance of workflow executions
             self.prospective_prov(job)
             customised_job = copy_job_order(job, job_order_object)
+            # Note to self: Listing goes ok here
             self.used_artefacts(customised_job, self.workflow_run_uri)
 
     def record_process_start(
@@ -287,6 +289,7 @@ class ProvenanceProfile:
         process_run_id: str,
         outputs: Union[CWLObjectType, MutableSequence[CWLObjectType], None],
         when: datetime.datetime,
+        # load_listing: None,
     ) -> None:
         self.generate_output_prov(outputs, process_run_id, process_name)
         self.document.wasEndedBy(process_run_id, None, self.workflow_run_uri, when)
@@ -300,7 +303,11 @@ class ProvenanceProfile:
         if "checksum" in value:
             csum = cast(str, value["checksum"])
             (method, checksum) = csum.split("$", 1)
-            if method == SHA1 and self.research_object.has_data_file(checksum):
+            # TODO Input, intermediate or output file?...
+            # if provenance_constants.DATA == 'data/input'
+            if method == SHA1 and self.research_object.has_data_file(
+                provenance_constants.DATA, checksum # DATAX
+            ):
                 entity = self.document.entity("data:" + checksum)
 
         if not entity and "location" in value:
@@ -408,8 +415,8 @@ class ProvenanceProfile:
         # a later call to this method will sort that
         is_empty = True
 
-        if "listing" not in value:
-            get_listing(self.fsaccess, value)
+        # if "listing" not in value:
+        #     get_listing(self.fsaccess, value)
         for entry in cast(MutableSequence[CWLObjectType], value.get("listing", [])):
             is_empty = False
             # Declare child-artifacts
@@ -604,6 +611,7 @@ class ProvenanceProfile:
         job_order: Union[CWLObjectType, List[CWLObjectType]],
         process_run_id: str,
         name: Optional[str] = None,
+        load_listing=None,
     ) -> None:
         """Add used() for each data artefact."""
         if isinstance(job_order, list):
@@ -634,7 +642,10 @@ class ProvenanceProfile:
         process_run_id: Optional[str],
         name: Optional[str],
     ) -> None:
-        """Call wasGeneratedBy() for each output,copy the files into the RO."""
+        """Call wasGeneratedBy() for each output, copy the files into the RO."""
+        # TODO: Change INPUT_DATA to OUTPUT_DATA?
+        provenance_constants.DATA = provenance_constants.OUTPUT_DATA
+
         if isinstance(final_output, MutableSequence):
             for entry in final_output:
                 self.generate_output_prov(entry, process_run_id, name)
