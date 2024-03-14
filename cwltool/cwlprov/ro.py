@@ -64,6 +64,216 @@ from .provenance_constants import (
     WORKFLOW,
     Hasher, DATAX,
 )
+from .stdfsaccess import StdFsAccess
+from .utils import (
+    CWLObjectType,
+    CWLOutputType,
+    create_tmp_dir,
+    local_path,
+    posix_path,
+    versionstring,
+)
+
+if TYPE_CHECKING:
+    from .command_line_tool import (  # pylint: disable=unused-import
+        CommandLineTool,
+        ExpressionTool,
+    )
+    from .workflow import Workflow  # pylint: disable=unused-import
+
+
+def _whoami() -> Tuple[str, str]:
+    """Return the current operating system account as (username, fullname)."""
+    username = getuser()
+    fullname = ""
+    try:
+        fullname = pwd.getpwuid(os.getuid())[4].split(",")[0]
+    except (KeyError, IndexError):
+        pass
+    if fullname == "":
+        fullname = username
+
+    return (username, fullname)
+
+
+class WritableBagFile(FileIO):
+    """Writes files in research object."""
+
+    def __init__(self, research_object: "ResearchObject", rel_path: str) -> None:
+        """Initialize an ROBagIt."""
+        self.research_object = research_object
+        if Path(rel_path).is_absolute():
+            raise ValueError("rel_path must be relative: %s" % rel_path)
+        self.rel_path = rel_path
+        self.hashes = {
+            SHA1: hashlib.sha1(),  # nosec
+            SHA256: hashlib.sha256(),
+            SHA512: hashlib.sha512(),
+        }
+        # Open file in Research Object folder
+        path = os.path.abspath(
+            os.path.join(research_object.folder, local_path(rel_path))
+        )
+        if not path.startswith(os.path.abspath(research_object.folder)):
+            raise ValueError("Path is outside Research Object: %s" % path)
+        _logger.debug("[provenance] Creating WritableBagFile at %s.", path)
+        super().__init__(path, mode="w")
+
+    def write(self, b: Any) -> int:
+        """Write some content to the Bag."""
+        real_b = b if isinstance(b, (bytes, mmap, array)) else b.encode("utf-8")
+        total = 0
+        length = len(real_b)
+        while total < length:
+            ret = super().write(real_b)
+            if ret:
+                total += ret
+        for val in self.hashes.values():
+            # print("Updating hasher %s ", val)
+            val.update(real_b)
+        return total
+
+    def close(self) -> None:
+        # FIXME: Convert below block to a ResearchObject method?
+        if self.rel_path.startswith("data/"):
+            self.research_object.bagged_size[self.rel_path] = self.tell()
+        else:
+            self.research_object.tagfiles.add(self.rel_path)
+
+        super().close()
+        # { "sha1": "f572d396fae9206628714fb2ce00f72e94f2258f" }
+        checksums = {}
+        for name in self.hashes:
+            checksums[name] = self.hashes[name].hexdigest().lower()
+        self.research_object.add_to_manifest(self.rel_path, checksums)
+
+    # To simplify our hash calculation we won't support
+    # seeking, reading or truncating, as we can't do
+    # similar seeks in the current hash.
+    # TODO: Support these? At the expense of invalidating
+    # the current hash, then having to recalculate at close()
+    def seekable(self) -> bool:
+        return False
+
+    def readable(self) -> bool:
+        return False
+
+    def truncate(self, size: Optional[int] = None) -> int:
+        # FIXME: This breaks contract IOBase,
+        # as it means we would have to recalculate the hash
+        if size is not None:
+            raise OSError("WritableBagFile can't truncate")
+        return self.tell()
+
+
+def _check_mod_11_2(numeric_string: str) -> bool:
+    """
+    Validate numeric_string for its MOD-11-2 checksum.
+
+    Any "-" in the numeric_string are ignored.
+
+    The last digit of numeric_string is assumed to be the checksum, 0-9 or X.
+
+    See ISO/IEC 7064:2003 and
+    https://support.orcid.org/knowledgebase/articles/116780-structure-of-the-orcid-identifier
+    """
+    # Strip -
+    nums = numeric_string.replace("-", "")
+    total = 0
+    # skip last (check)digit
+    for num in nums[:-1]:
+        digit = int(num)
+        total = (total + digit) * 2
+    remainder = total % 11
+    result = (12 - remainder) % 11
+    if result == 10:
+        checkdigit = "X"
+    else:
+        checkdigit = str(result)
+    # Compare against last digit or X
+    return nums[-1].upper() == checkdigit
+
+
+def _valid_orcid(orcid: Optional[str]) -> str:
+    """
+    Ensure orcid is a valid ORCID identifier.
+
+    The string must be equivalent to one of these forms:
+
+    0000-0002-1825-0097
+    orcid.org/0000-0002-1825-0097
+    http://orcid.org/0000-0002-1825-0097
+    https://orcid.org/0000-0002-1825-0097
+
+    If the ORCID number or prefix is invalid, a ValueError is raised.
+
+    The returned ORCID string is always in the form of:
+    https://orcid.org/0000-0002-1825-0097
+    """
+    if orcid is None or not orcid:
+        raise ValueError("ORCID cannot be unspecified")
+    # Liberal in what we consume, e.g. ORCID.org/0000-0002-1825-009x
+    orcid = orcid.lower()
+    match = re.match(
+        # Note: concatenated r"" r"" below so we can add comments to pattern
+        # Optional hostname, with or without protocol
+        r"(http://orcid\.org/|https://orcid\.org/|orcid\.org/)?"
+        # alternative pattern, but probably messier
+        # r"^((https?://)?orcid.org/)?"
+        # ORCID number is always 4x4 numerical digits,
+        # but last digit (modulus 11 checksum)
+        # can also be X (but we made it lowercase above).
+        # e.g. 0000-0002-1825-0097
+        # or   0000-0002-1694-233x
+        r"(?P<orcid>(\d{4}-\d{4}-\d{4}-\d{3}[0-9x]))$",
+        orcid,
+    )
+
+    help_url = (
+        "https://support.orcid.org/knowledgebase/articles/"
+        "116780-structure-of-the-orcid-identifier"
+    )
+    if not match:
+        raise ValueError(f"Invalid ORCID: {orcid}\n{help_url}")
+
+    # Conservative in what we produce:
+    # a) Ensure any checksum digit is uppercase
+    orcid_num = match.group("orcid").upper()
+    # b) ..and correct
+    if not _check_mod_11_2(orcid_num):
+        raise ValueError(f"Invalid ORCID checksum: {orcid_num}\n{help_url}")
+
+    # c) Re-add the official prefix https://orcid.org/
+    return "https://orcid.org/%s" % orcid_num
+
+
+Annotation = TypedDict(
+    "Annotation",
+    {
+        "uri": str,
+        "about": str,
+        "content": Optional[Union[str, List[str]]],
+        "oa:motivatedBy": Dict[str, str],
+    },
+)
+Aggregate = TypedDict(
+    "Aggregate",
+    {
+        "uri": Optional[str],
+        "bundledAs": Optional[Dict[str, Any]],
+        "mediatype": Optional[str],
+        "conformsTo": Optional[Union[str, List[str]]],
+        "createdOn": Optional[str],
+        "createdBy": Optional[Dict[str, str]],
+    },
+    total=False,
+)
+# Aggregate.bundledAs is actually type Aggregate, but cyclic definitions are not supported
+AuthoredBy = TypedDict(
+    "AuthoredBy",
+    {"orcid": Optional[str], "name": Optional[str], "uri": Optional[str]},
+    total=False,
+)
 
 
 class ResearchObject:
