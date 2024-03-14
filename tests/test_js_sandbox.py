@@ -1,4 +1,5 @@
 """Test sandboxjs.py and related code."""
+
 import logging
 import os
 import shutil
@@ -22,7 +23,7 @@ node_versions = [
     ("v7.7.3\n", True),
 ]
 
-configure_logging(_logger.handlers[-1], False, True, True, True)
+configure_logging(_logger.handlers[-1], False, False, True, True, True)
 _logger.setLevel(logging.DEBUG)
 
 
@@ -63,6 +64,10 @@ def hide_nodejs(temp_dir: Path) -> str:
                 if entry not in ("nodejs", "node"):
                     os.symlink(os.path.join(dirname, entry), new_dir / entry)
             paths.append(str(new_dir))
+            dirname_path = Path(dirname)
+            for path in list(paths):
+                if Path(path).resolve() == dirname_path:
+                    paths.remove(path)
     return ":".join(paths)
 
 
@@ -94,12 +99,17 @@ def test_value_from_two_concatenated_expressions_singularity(
     js_engine = sandboxjs.get_js_engine()
     js_engine.have_node_slim = False  # type: ignore[attr-defined]
     js_engine.localdata = threading.local()  # type: ignore[attr-defined]
-    new_paths = hide_nodejs(tmp_path)
+    hide_base = tmp_path / "hide"
+    hide_base.mkdir()
+    new_paths = hide_nodejs(hide_base)
+    singularity_cache = tmp_path / "singularity"
+    singularity_cache.mkdir()
     factory = Factory()
     factory.loading_context.singularity = True
     factory.loading_context.debug = True
     factory.runtime_context.debug = True
     with monkeypatch.context() as m:
+        m.setenv("CWL_SINGULARITY_CACHE", str(singularity_cache))
         m.setenv("PATH", new_paths)
         echo = factory.make(get_data("tests/wf/vf-concat.cwl"))
         file = {"class": "File", "location": get_data("tests/wf/whale.txt")}

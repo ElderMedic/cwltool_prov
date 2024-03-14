@@ -1,4 +1,5 @@
 """Test the prototype loop extension."""
+
 import json
 from io import StringIO
 from typing import MutableMapping, MutableSequence
@@ -147,7 +148,7 @@ def test_loop_two_variables() -> None:
 
 
 def test_loop_two_variables_single_backpropagation() -> None:
-    """Test a loop case with two variables, but when only one of them is back-propagated between iterations."""
+    """Test loop with 2 variables, but when only one of them is back-propagated between iterations."""
     stream = StringIO()
     params = [
         "--enable-ext",
@@ -199,7 +200,7 @@ def test_loop_value_from() -> None:
 
 
 def test_loop_value_from_fail_no_requirement() -> None:
-    """Test that a workflow loop fails if a valueFrom directive is specified without StepInputExpressionRequirement."""
+    """Test workflow loop fails for valueFrom without StepInputExpressionRequirement."""
     params = [
         "--enable-ext",
         get_data("tests/loop/invalid-value-from-loop-no-requirement.cwl"),
@@ -218,6 +219,19 @@ def test_loop_inside_scatter() -> None:
     ]
     main(params, stdout=stream)
     expected = {"o1": [10, 10, 10, 10, 10]}
+    assert json.loads(stream.getvalue()) == expected
+
+
+def test_scatter_inside_loop() -> None:
+    """Test a loop workflow with inside a scatter step."""
+    stream = StringIO()
+    params = [
+        "--enable-ext",
+        get_data("tests/loop/scatter-inside-loop.cwl"),
+        get_data("tests/loop/loop-inside-scatter-job.yml"),
+    ]
+    main(params, stdout=stream)
+    expected = {"o1": [10, 11, 12, 13, 14]}
     assert json.loads(stream.getvalue()) == expected
 
 

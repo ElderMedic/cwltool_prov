@@ -1,4 +1,4 @@
-"""Support for executing Docker containers using the Singularity 2.x engine."""
+"""Support for executing Docker format containers using Singularity {2,3}.x or Apptainer 1.x."""
 
 import logging
 import os
@@ -10,9 +10,13 @@ from subprocess import check_call, check_output  # nosec
 from typing import Callable, Dict, List, MutableMapping, Optional, Tuple, cast
 
 from schema_salad.sourceline import SourceLine
+from spython.main import Client
+from spython.main.parse.parsers.docker import DockerParser
+from spython.main.parse.writers.singularity import SingularityWriter
 
 from .builder import Builder
 from .context import RuntimeContext
+from .docker import DockerCommandLineJob
 from .errors import WorkflowException
 from .job import ContainerCommandLineJob
 from .loghandler import _logger
@@ -32,22 +36,18 @@ _SINGULARITY_FLAVOR: str = ""
 
 def get_version() -> Tuple[List[int], str]:
     """
-    Parse the output of 'singularity --version' to determine the singularity flavor /
-    distribution (singularity, singularity-ce or apptainer) and the singularity version.
+    Parse the output of 'singularity --version' to determine the flavor and version.
+
     Both pieces of information will be cached.
 
-    Returns
-    -------
-    A tuple containing:
-    - A tuple with major and minor version numbers as integer.
-    - A string with the name of the singularity flavor.
+    :returns: A tuple containing:
+              - A tuple with major and minor version numbers as integer.
+              - A string with the name of the singularity flavor.
     """
     global _SINGULARITY_VERSION  # pylint: disable=global-statement
     global _SINGULARITY_FLAVOR  # pylint: disable=global-statement
     if _SINGULARITY_VERSION is None:
-        version_output = check_output(  # nosec
-            ["singularity", "--version"], universal_newlines=True
-        ).strip()
+        version_output = check_output(["singularity", "--version"], text=True).strip()  # nosec
 
         version_match = re.match(r"(.+) version ([0-9\.]+)", version_output)
         if version_match is None:
@@ -57,9 +57,7 @@ def get_version() -> Tuple[List[int], str]:
         _SINGULARITY_VERSION = [int(i) for i in version_string.split(".")]
         _SINGULARITY_FLAVOR = version_match.group(1)
 
-        _logger.debug(
-            f"Singularity version: {version_string}" " ({_SINGULARITY_FLAVOR}."
-        )
+        _logger.debug(f"Singularity version: {version_string}" " ({_SINGULARITY_FLAVOR}.")
     return (_SINGULARITY_VERSION, _SINGULARITY_FLAVOR)
 
 
@@ -112,6 +110,14 @@ def is_version_3_4_or_newer() -> bool:
     return v[0][0] >= 4 or (v[0][0] == 3 and v[0][1] >= 4)
 
 
+def is_version_3_9_or_newer() -> bool:
+    """Detect if Singularity v3.9+ is available."""
+    if is_apptainer_1_or_newer():
+        return True  # this is equivalent to singularity-ce > 3.9.5
+    v = get_version()
+    return v[0][0] >= 4 or (v[0][0] == 3 and v[0][1] >= 9)
+
+
 def _normalize_image_id(string: str) -> str:
     return string.replace("/", "_") + ".img"
 
@@ -125,7 +131,7 @@ class SingularityCommandLineJob(ContainerCommandLineJob):
         self,
         builder: Builder,
         joborder: CWLObjectType,
-        make_path_mapper: Callable[..., PathMapper],
+        make_path_mapper: Callable[[List[CWLObjectType], str, RuntimeContext, bool], PathMapper],
         requirements: List[CWLObjectType],
         hints: List[CWLObjectType],
         name: str,
@@ -137,6 +143,7 @@ class SingularityCommandLineJob(ContainerCommandLineJob):
     def get_image(
         dockerRequirement: Dict[str, str],
         pull_image: bool,
+        tmp_outdir_prefix: str,
         force_pull: bool = False,
     ) -> bool:
         """
@@ -159,13 +166,51 @@ class SingularityCommandLineJob(ContainerCommandLineJob):
         elif is_version_2_6() and "SINGULARITY_PULLFOLDER" in os.environ:
             cache_folder = os.environ["SINGULARITY_PULLFOLDER"]
 
-        if (
-            "dockerImageId" not in dockerRequirement
-            and "dockerPull" in dockerRequirement
-        ):
-            match = re.search(
-                pattern=r"([a-z]*://)", string=dockerRequirement["dockerPull"]
-            )
+        if "dockerFile" in dockerRequirement:
+            if cache_folder is None:  # if environment variables were not set
+                cache_folder = create_tmp_dir(tmp_outdir_prefix)
+
+            absolute_path = os.path.abspath(cache_folder)
+            if "dockerImageId" in dockerRequirement:
+                image_name = dockerRequirement["dockerImageId"]
+                image_path = os.path.join(absolute_path, image_name)
+                if os.path.exists(image_path):
+                    found = True
+            if found is False:
+                dockerfile_path = os.path.join(absolute_path, "Dockerfile")
+                singularityfile_path = dockerfile_path + ".def"
+                # if you do not set APPTAINER_TMPDIR will crash
+                # WARNING: 'nodev' mount option set on /tmp, it could be a
+                #          source of failure during build process
+                # FATAL:   Unable to create build: 'noexec' mount option set on
+                #          /tmp, temporary root filesystem won't be usable at this location
+                with open(dockerfile_path, "w") as dfile:
+                    dfile.write(dockerRequirement["dockerFile"])
+
+                singularityfile = SingularityWriter(DockerParser(dockerfile_path).parse()).convert()
+                with open(singularityfile_path, "w") as file:
+                    file.write(singularityfile)
+
+                os.environ["APPTAINER_TMPDIR"] = absolute_path
+                singularity_options = ["--fakeroot"] if not shutil.which("proot") else []
+                if "dockerImageId" in dockerRequirement:
+                    Client.build(
+                        recipe=singularityfile_path,
+                        build_folder=absolute_path,
+                        image=dockerRequirement["dockerImageId"],
+                        sudo=False,
+                        options=singularity_options,
+                    )
+                else:
+                    Client.build(
+                        recipe=singularityfile_path,
+                        build_folder=absolute_path,
+                        sudo=False,
+                        options=singularity_options,
+                    )
+                found = True
+        elif "dockerImageId" not in dockerRequirement and "dockerPull" in dockerRequirement:
+            match = re.search(pattern=r"([a-z]*://)", string=dockerRequirement["dockerPull"])
             img_name = _normalize_image_id(dockerRequirement["dockerPull"])
             candidates.append(img_name)
             if is_version_3_or_newer():
@@ -175,9 +220,7 @@ class SingularityCommandLineJob(ContainerCommandLineJob):
             else:
                 dockerRequirement["dockerImageId"] = img_name
             if not match:
-                dockerRequirement["dockerPull"] = (
-                    "docker://" + dockerRequirement["dockerPull"]
-                )
+                dockerRequirement["dockerPull"] = "docker://" + dockerRequirement["dockerPull"]
         elif "dockerImageId" in dockerRequirement:
             if os.path.isfile(dockerRequirement["dockerImageId"]):
                 found = True
@@ -224,9 +267,7 @@ class SingularityCommandLineJob(ContainerCommandLineJob):
                             "pull",
                             "--force",
                             "--name",
-                            "{}/{}".format(
-                                cache_folder, dockerRequirement["dockerImageId"]
-                            ),
+                            "{}/{}".format(cache_folder, dockerRequirement["dockerImageId"]),
                             str(dockerRequirement["dockerPull"]),
                         ]
 
@@ -249,13 +290,6 @@ class SingularityCommandLineJob(ContainerCommandLineJob):
                     check_call(cmd, stdout=sys.stderr)  # nosec
                     found = True
 
-            elif "dockerFile" in dockerRequirement:
-                raise SourceLine(
-                    dockerRequirement, "dockerFile", WorkflowException, debug
-                ).makeError(
-                    "dockerFile is not currently supported when using the "
-                    "Singularity runtime for Docker containers."
-                )
             elif "dockerLoad" in dockerRequirement:
                 if is_version_3_1_or_newer():
                     if "dockerImageId" in dockerRequirement:
@@ -304,24 +338,30 @@ class SingularityCommandLineJob(ContainerCommandLineJob):
         if not bool(shutil.which("singularity")):
             raise WorkflowException("singularity executable is not available")
 
-        if not self.get_image(cast(Dict[str, str], r), pull_image, force_pull):
-            raise WorkflowException(
-                "Container image {} not found".format(r["dockerImageId"])
-            )
+        if not self.get_image(cast(Dict[str, str], r), pull_image, tmp_outdir_prefix, force_pull):
+            raise WorkflowException("Container image {} not found".format(r["dockerImageId"]))
 
-        return os.path.abspath(cast(str, r["dockerImageId"]))
+        if "CWL_SINGULARITY_CACHE" in os.environ:
+            cache_folder = os.environ["CWL_SINGULARITY_CACHE"]
+            img_path = os.path.join(cache_folder, cast(str, r["dockerImageId"]))
+        else:
+            img_path = cast(str, r["dockerImageId"])
+
+        return os.path.abspath(img_path)
 
     @staticmethod
-    def append_volume(
-        runtime: List[str], source: str, target: str, writable: bool = False
-    ) -> None:
-        runtime.append("--bind")
-        # Mounts are writable by default, so 'rw' is optional and not
-        # supported (due to a bug) in some 3.6 series releases.
-        vol = f"{source}:{target}"
-        if not writable:
-            vol += ":ro"
-        runtime.append(vol)
+    def append_volume(runtime: List[str], source: str, target: str, writable: bool = False) -> None:
+        """Add binding arguments to the runtime list."""
+        if is_version_3_9_or_newer():
+            DockerCommandLineJob.append_volume(runtime, source, target, writable, skip_mkdirs=True)
+        else:
+            runtime.append("--bind")
+            # Mounts are writable by default, so 'rw' is optional and not
+            # supported (due to a bug) in some 3.6 series releases.
+            vol = f"{source}:{target}"
+            if not writable:
+                vol += ":ro"
+            runtime.append(vol)
 
     def add_file_or_directory_volume(
         self, runtime: List[str], volume: MapperEnt, host_outdir_tgt: Optional[str]
@@ -350,7 +390,7 @@ class SingularityCommandLineJob(ContainerCommandLineJob):
             if self.inplace_update:
                 try:
                     os.link(os.path.realpath(volume.resolved), host_outdir_tgt)
-                except os.error:
+                except OSError:
                     shutil.copy(volume.resolved, host_outdir_tgt)
             else:
                 shutil.copy(volume.resolved, host_outdir_tgt)
@@ -401,19 +441,13 @@ class SingularityCommandLineJob(ContainerCommandLineJob):
                 ensure_writable(host_outdir_tgt)
             else:
                 if self.inplace_update:
-                    self.append_volume(
-                        runtime, volume.resolved, volume.target, writable=True
-                    )
+                    self.append_volume(runtime, volume.resolved, volume.target, writable=True)
                 else:
                     if not host_outdir_tgt:
                         tmpdir = create_tmp_dir(tmpdir_prefix)
-                        new_dir = os.path.join(
-                            tmpdir, os.path.basename(volume.resolved)
-                        )
+                        new_dir = os.path.join(tmpdir, os.path.basename(volume.resolved))
                         shutil.copytree(volume.resolved, new_dir)
-                        self.append_volume(
-                            runtime, new_dir, volume.target, writable=True
-                        )
+                        self.append_volume(runtime, new_dir, volume.target, writable=True)
                     else:
                         shutil.copytree(volume.resolved, host_outdir_tgt)
                     ensure_writable(host_outdir_tgt or new_dir)

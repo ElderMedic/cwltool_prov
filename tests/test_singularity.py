@@ -1,7 +1,10 @@
 """Tests to find local Singularity image."""
+
 import shutil
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from cwltool.main import main
 
@@ -58,7 +61,10 @@ def test_singularity_workflow(tmp_path: Path) -> None:
     assert error_code == 0
 
 
-def test_singularity_iwdr() -> None:
+def test_singularity_iwdr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    singularity_dir = tmp_path / "singularity"
+    singularity_dir.mkdir()
+    monkeypatch.setenv("CWL_SINGULARITY_CACHE", str(singularity_dir))
     result_code = main(
         [
             "--singularity",

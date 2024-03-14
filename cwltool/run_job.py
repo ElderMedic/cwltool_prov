@@ -1,4 +1,5 @@
 """Only used when there is a job script or CWLTOOL_FORCE_SHELL_POPEN=1."""
+
 import json
 import os
 import subprocess  # nosec
@@ -12,9 +13,7 @@ def handle_software_environment(cwl_env: Dict[str, str], script: str) -> Dict[st
     exec_env["_CWLTOOL"] = "1"
     res = subprocess.run(["bash", script], shell=False, env=exec_env)  # nosec
     if res.returncode != 0:
-        sys.stderr.write(
-            "Error while using SoftwareRequirements to modify environment\n"
-        )
+        sys.stderr.write("Error while using SoftwareRequirements to modify environment\n")
         return cwl_env
 
     env = cwl_env.copy()

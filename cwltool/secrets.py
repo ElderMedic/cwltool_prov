@@ -1,4 +1,5 @@
 """Minimal in memory storage of secrets."""
+
 import uuid
 from typing import Dict, List, MutableMapping, MutableSequence, Optional, cast
 
@@ -10,7 +11,7 @@ class SecretStore:
 
     def __init__(self) -> None:
         """Initialize the secret store."""
-        self.secrets = {}  # type: Dict[str, str]
+        self.secrets: Dict[str, str] = {}
 
     def add(self, value: Optional[CWLOutputType]) -> Optional[CWLOutputType]:
         """
